@@ -45,6 +45,14 @@ type ContentBlock struct {
 	Thinking  string `json:"thinking,omitempty"`
 	Signature string `json:"signature,omitempty"`
 
+	// CacheControl marks this block as an Anthropic prompt-cache breakpoint
+	// ({"type":"ephemeral"}). Anthropic caches the whole prefix UP TO AND
+	// INCLUDING the marked block, so it is set on the last block of the stable
+	// message prefix, never on the newest turn. omitempty keeps it off the wire
+	// for every other provider; the OpenAI path builds its own structs
+	// (toOpenAIMessages) and never sees it.
+	CacheControl map[string]any `json:"cache_control,omitempty"`
+
 	// RedactedThinking block: the encrypted payload, replayed unchanged.
 	Data string `json:"data,omitempty"`
 

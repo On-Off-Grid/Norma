@@ -45,6 +45,41 @@ type anthropicTool struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	InputSchema map[string]any `json:"input_schema"`
+	// CacheControl on the LAST tool caches the whole tool block, which is
+	// static across a run and is resent on every call.
+	CacheControl map[string]any `json:"cache_control,omitempty"`
+}
+
+// ephemeral is one Anthropic prompt-cache breakpoint.
+func ephemeral() map[string]any { return map[string]any{"type": "ephemeral"} }
+
+// markMessagePrefix places a cache breakpoint on the last content block of the
+// stable message prefix — everything except the final turn, which changes on
+// every call and would make the write useless. Thinking blocks are skipped:
+// their marshaller emits a fixed field set, so a cache_control key there would
+// be dropped silently. Returns the messages unchanged when there is no stable
+// prefix to cache.
+func markMessagePrefix(msgs []Message) []Message {
+	if len(msgs) < 2 {
+		return msgs
+	}
+	for i := len(msgs) - 2; i >= 0; i-- {
+		for j := len(msgs[i].Content) - 1; j >= 0; j-- {
+			if msgs[i].Content[j].Type == BlockThinking {
+				continue
+			}
+			// Copy the slices being mutated so a cached/shared history is not
+			// written through.
+			out := make([]Message, len(msgs))
+			copy(out, msgs)
+			blocks := make([]ContentBlock, len(out[i].Content))
+			copy(blocks, out[i].Content)
+			blocks[j].CacheControl = ephemeral()
+			out[i].Content = blocks
+			return out
+		}
+	}
+	return msgs
 }
 
 func (p *anthropicProvider) buildBody(req CompletionRequest, stream bool) ([]byte, error) {
@@ -64,7 +99,7 @@ func (p *anthropicProvider) buildBody(req CompletionRequest, stream bool) ([]byt
 	}
 	body := anthropicReq{
 		Model:         p.cfg.Model,
-		Messages:      mergeAdjacentSameRole(filterThinkingBlocks(req.Messages, thinkingEnabled)),
+		Messages:      markMessagePrefix(mergeAdjacentSameRole(filterThinkingBlocks(req.Messages, thinkingEnabled))),
 		MaxTokens:     maxTok,
 		Temperature:   req.Temperature,
 		StopSequences: req.Stop,
@@ -73,6 +108,12 @@ func (p *anthropicProvider) buildBody(req CompletionRequest, stream bool) ([]byt
 	}
 	for _, t := range req.Tools {
 		body.Tools = append(body.Tools, anthropicTool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
+	}
+	// The tool block is static across a run and resent on every call, so cache
+	// it: one breakpoint on the last tool covers all of them. Anthropic allows
+	// 4 breakpoints; this request uses at most 3 (system, tools, messages).
+	if n := len(body.Tools); n > 0 {
+		body.Tools[n-1].CacheControl = ephemeral()
 	}
 	if thinkingType != "" {
 		body.Thinking = &anthropicThinking{Type: thinkingType}
@@ -97,10 +138,10 @@ func buildAnthropicSystem(req CompletionRequest) []anthropicSystemBlock {
 	if b >= len(req.System) {
 		// Boundary at/after the end → the whole system prompt is static; cache it
 		// all in one block (an all-static prompt should still be cacheable).
-		return []anthropicSystemBlock{{Type: "text", Text: joinSystem(req.System), CacheControl: map[string]any{"type": "ephemeral"}}}
+		return []anthropicSystemBlock{{Type: "text", Text: joinSystem(req.System), CacheControl: ephemeral()}}
 	}
 	return []anthropicSystemBlock{
-		{Type: "text", Text: joinSystem(req.System[:b]), CacheControl: map[string]any{"type": "ephemeral"}},
+		{Type: "text", Text: joinSystem(req.System[:b]), CacheControl: ephemeral()},
 		{Type: "text", Text: joinSystem(req.System[b:])},
 	}
 }

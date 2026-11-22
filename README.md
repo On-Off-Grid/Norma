@@ -1,3 +1,25 @@
+> ### What this fork changes
+>
+> This is a fork of [BaaRai/Norma](https://github.com/BaaRai/Norma) (itself a fork of
+> [Autumn-27/Norma](https://github.com/Autumn-27/Norma)), branched from `v0.4.11`.
+>
+> **One change: more Anthropic prompt-cache breakpoints.** Upstream caches only the system
+> prompt (split at `DynamicBoundary`). This fork additionally marks:
+>
+> * the **last tool definition** — the tool block is static across a run and resent on every call;
+> * the **last block of the stable message prefix** — everything except the newest turn, which
+>   changes on every call and would make the write useless.
+>
+> Thinking blocks are never marked: their marshaller emits a fixed field set, so a `cache_control`
+> key there is dropped silently. A request now uses at most 3 of Anthropic's 4 breakpoints
+> (system, tools, messages). Every other provider is unaffected — the fields are `omitempty` and
+> the OpenAI path builds its own structs.
+>
+> Measured on a real agent planner call (23,802 input tokens): cacheable share rises from ~13%
+> (system only) to ~87%. Tests: `llm/anthropic_cache_test.go`.
+>
+> Licensed Apache-2.0, as upstream. See `llm/anthropic.go` and `llm/types.go` for the change.
+
 # Norma
 
 A general-purpose **Agent Harness SDK in Go**. Norma is the engine that turns a language model into an autonomous agent: a streaming tool-use loop that lets a model read, run, and reason its way through a task while you keep control of the prompt, the tools, and the safety boundary.
